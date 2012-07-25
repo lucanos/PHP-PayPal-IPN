@@ -122,7 +122,7 @@ class IpnListener {
     protected function fsockPost( $encoded_data ){
 
         $uri = ( $this->use_ssl ? 'ssl' : 'http' ).'://'.$this->host;
-        $port = ( $this->use_ssl ? '443' : '80' );
+        $port = ( $this->use_ssl ? 443 : 80 );
         $this->post_uri = $uri.'/cgi-bin/webscr';
 
         $fp = fsockopen( $uri , $port , $errno , $errstr , $this->timeout );
