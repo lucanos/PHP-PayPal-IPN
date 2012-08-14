@@ -223,6 +223,10 @@ class IpnListener {
     */
     public function processIpn( $post_data=null ){
 
+        if( isset( $_SERVER['REMOTE_ADDR'] ) && !preg_match( '/.*\.paypal\.com$/' , gethostbyaddr( $_SERVER['REMOTE_ADDR'] ) ) ){
+            throw new Exception("Unexpected Remote IP Address: ".gethostbyaddr( $_SERVER['REMOTE_ADDR'] )." (".$_SERVER['REMOTE_ADDR'].")");
+        }
+
         $encoded_data = 'cmd=_notify-validate';
 
         $this->host = ( $this->use_sandbox ? IpnListener::SANDBOX_HOST : IpnListener::PAYPAL_HOST );
