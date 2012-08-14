@@ -229,7 +229,7 @@ class IpnListener {
 
         $encoded_data = 'cmd=_notify-validate';
 
-        $this->host = ( $this->use_sandbox ? IpnListener::SANDBOX_HOST : IpnListener::PAYPAL_HOST );
+        $this->host = 'www.'.( $this->use_sandbox ? 'sandbox.' : '' ).'paypal.com';
 
         if( $post_data!==null ){
             // use provided data array
