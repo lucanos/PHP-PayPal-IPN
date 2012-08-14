@@ -69,9 +69,8 @@ class IpnListener {
     private $response_status = '';
     private $response = '';
     private $host = false;
-
-    const PAYPAL_HOST = 'www.paypal.com';
-    const SANDBOX_HOST = 'www.sandbox.paypal.com';
+    private $remote_ip = false;
+    private $remote_host = false;
 
     /**
     * Post Back Using cURL
@@ -105,7 +104,7 @@ class IpnListener {
         if( $this->response===false || $this->response_status=='0' ){
             $errno = curl_errno( $ch );
             $errstr = curl_error( $ch );
-            throw new Exception( "cURL error: [$errno] $errstr" );
+            throw new Exception( 'cURL error: ['.$errno.'] '.$errstr );
         }
     }
 
@@ -121,24 +120,29 @@ class IpnListener {
     */
     protected function fsockPost( $encoded_data ){
 
+       # Configure settings for Socket
         $uri = ( $this->use_ssl ? 'ssl' : 'http' ).'://'.$this->host;
         $port = ( $this->use_ssl ? 443 : 80 );
         $this->post_uri = $uri.'/cgi-bin/webscr';
 
+       # Open the Socket
         $fp = fsockopen( $uri , $port , $errno , $errstr , $this->timeout );
 
+       # Check Socket Opened
         if( !$fp ){
-            // fsockopen error
-            throw new Exception( "fsockopen error: [$errno] $errstr" );
+            throw new Exception( 'fsockopen error: ['.$errno.'] '.$errstr );
         }
 
-        $header = "POST /cgi-bin/webscr HTTP/1.0\r\n";
-        $header .= "Content-Type: application/x-www-form-urlencoded\r\n";
-        $header .= "Content-Length: ".strlen( $encoded_data )."\r\n";
-        $header .= "Connection: Close\r\n\r\n";
+       # Create Header
+        $header =  'POST /cgi-bin/webscr HTTP/1.0'."\r\n";
+        $header .= 'Content-Type: application/x-www-form-urlencoded'."\r\n";
+        $header .= 'Content-Length: '.strlen( $encoded_data )."\r\n";
+        $header .= 'Connection: Close'."\r\n\r\n";
 
+       # Send Callback Data
         fputs( $fp , $header.$encoded_data."\r\n\r\n" );
 
+       # Recieve the Response
         while( !feof( $fp ) ){
             if( empty( $this->response ) ){
                 // extract HTTP status from first line
@@ -149,6 +153,7 @@ class IpnListener {
             }
         }
 
+       # Close the Socket
         fclose( $fp );
     }
 
@@ -187,12 +192,20 @@ class IpnListener {
     */
     public function getTextReport(){
 
+       # Initialise Array
         $r = array();
 
+       # Create and Insert First Separator
         $r[] = $separator = str_repeat( '-' , 80 );
         
-        // date and POST url
-        $r[] = '['.date( 'm/d/Y g:i A' ).'] - '.$this->post_uri.' ('.( $this->use_curl ? 'curl' : 'fsockopen' ).')';
+       # Date & Time
+        $r[] = '['.date( 'm/d/Y g:i A' ).']';
+       
+       # Basic Settings
+        $r[] = 'Calling IP Address: '.$_SERVER['REMOTE_ADDR'];
+        $r[] = 'Calling Hostname:   '.gethostbyaddr( $_SERVER['REMOTE_ADDR'] );
+        $r[] = 'Callback URI:       '.$this->post_uri;
+        $r[] = 'Callback Method:    '.( $this->use_curl ? 'cURL' : 'fsockopen' ).')';
 
         $r[] = $separator;
         
@@ -202,8 +215,12 @@ class IpnListener {
         $r[] = $separator;
         
         // POST vars
-        foreach( $this->post_data as $k => $v ){
-            $r[] = str_pad( $k , 25 ).' = '.$v;
+        if( count( $this->post_data ) ){
+          foreach( $this->post_data as $k => $v ){
+              $r[] = str_pad( $k , 25 ).' = '.$v;
+          }
+        }else{
+            $r[] = 'No POST Variables';
         }
 
         return implode( "\n" , $r )."\n\n";
@@ -223,42 +240,56 @@ class IpnListener {
     */
     public function processIpn( $post_data=null ){
 
-        if( isset( $_SERVER['REMOTE_ADDR'] ) && !preg_match( '/.*\.paypal\.com$/' , gethostbyaddr( $_SERVER['REMOTE_ADDR'] ) ) ){
-            throw new Exception("Unexpected Remote IP Address: ".gethostbyaddr( $_SERVER['REMOTE_ADDR'] )." (".$_SERVER['REMOTE_ADDR'].")");
+       # Get Caller's IP Address
+        $this->remote_ip = $this->getIpAddress();
+        $this->remote_host = gethostbyaddr( $this->remote_ip );
+       # Check whether Hostname resolves to PayPal domain
+        if( !preg_match( '/.*\.paypal\.com$/' , $this->remote_host ) ){
+            throw new Exception( 'Unexpected Remote IP Address: '.$this->remote_host.' ('.$this->remote_ip.')');
         }
 
+       # Start the Confirmation Querystring
         $encoded_data = 'cmd=_notify-validate';
 
-        $this->host = 'www.'.( $this->use_sandbox ? 'sandbox.' : '' ).'paypal.com';
-
         if( $post_data!==null ){
-            // use provided data array
+        
+           # Use provided data array
             $this->post_data = $post_data;
 
+           # Build the Confirmation Querystring
             if( function_exists( 'http_build_query' ) ){
-                $encoded_data .= http_build_query( $this->post_data );
+                $encoded_data .= '&'.http_build_query( $this->post_data );
             }else{
                 foreach( $this->post_data as $k => $v ){
-                    $encoded_data .= "&$k=".urlencode( $v );
+                    $encoded_data .= '&'.$k.'='.urlencode( $v );
                 }
             }
+            
         }elseif( !empty( $_POST ) ){
-            // use raw POST data
+           # Use raw POST data
             $this->post_data = $_POST;
             $encoded_data .= '&'.file_get_contents( 'php://input' );
         }else{
             throw new Exception( 'No POST data found.' );
         }
 
+       # Determine whether this is a Sandbox Request
+        $this->use_sandbox = isset( $this->post_data['test_ipn'] );
+       # Determine the PayPal IPN Hostname
+        $this->host = 'www.'.( $this->use_sandbox ? 'sandbox.' : '' ).'paypal.com';
+
+       # Determine Callback Method
         if( $this->use_curl )
             $this->curlPost( $encoded_data );
         else
             $this->fsockPost( $encoded_data );
 
+       # Check Callback HTTP Status
         if( strpos( $this->response_status , '200' )===false ){
             throw new Exception( 'Invalid response status: '.$this->response_status );
         }
 
+       # Check Callback Response
         if( strpos( $this->response , 'VERIFIED' )!==false )
             return true;
         if( strpos( $this->response , 'INVALID' )!==false )
@@ -280,4 +311,26 @@ class IpnListener {
             throw new Exception( 'Invalid HTTP request method.' );
         }
     }
+
+    /**
+    * Get IP Address
+    *
+    * Returns the true IP address of the remote computer, even if behind
+    * a Load Balancer, Proxy, etc.
+    *
+    * @return string
+    */
+    protected function getIpAddress(){
+     # IP Address behind Shared Internet
+      if( isset( $_SERVER['HTTP_CLIENT_IP'] ) && !empty( $_SERVER['HTTP_CLIENT_IP'] ) )
+        return $_SERVER['HTTP_CLIENT_IP'];
+     # IP Address behind Proxy or Load Balancer
+      if( isset( $_SERVER['HTTP_X_FORWARDED_FOR'] ) && !empty( $_SERVER['HTTP_X_FORWARDED_FOR'] ) )
+        return $_SERVER['HTTP_X_FORWARDED_FOR'];
+     # Standard Remote Address
+      if( isset( $_SERVER['REMOTE_ADDR'] ) && !empty( $_SERVER['REMOTE_ADDR'] ) )
+        return $_SERVER['REMOTE_ADDR'];
+      return false;
+    }
+
 }
